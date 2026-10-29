@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>綠禾媒體 - 出勤作業管理系統</title>
+    
+    <!-- 引入必要的 Library -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+
+    <style>
+        /* 參照提供截圖的暗黑農場系配色 */
+        :root {
+            --bg-base: #0B0F19;
+            --bg-card: #161B22;
+            --primary: #10B981;
+            --primary-dark: #059669;
+            --accent-pink: #EC4899;
+            --accent-pink-dark: #BE185D;
+            --border-color: #1F2937;
+        }
+        body { background-color: var(--bg-base); color: #E5E7EB; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; overflow: hidden; }
+        [v-cloak] { display: none; }
+        
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; height: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #374151; border-radius: 4px; }
+        
+        .slide-up { animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
+        @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+        
+        /* 列印與匯出 PDF 用樣式 */
+        @media print {
+            .no-print { display: none !important; }
+            body { background: white !important; color: black !important; }
+            .bg-card { background: white !important; border: 1px solid #ccc !important; }
+            .text-white { color: black !important; }
+        }
+    </style>
+</head>
+<body>
+
+<div id="app" v-cloak class="h-[100dvh] w-full flex flex-col relative">
+
+    <!-- 1. 模擬身分登入對話視窗 (卡牌式) -->
+    <div v-if="!currentUser" class="absolute inset-0 z-50 bg-[#0B0F19] flex flex-col items-center justify-center p-4">
+        <div class="text-center mb-8">
+            <h1 class="text-2xl font-bold text-white mb-2"><i class="fa-solid fa-leaf text-[#10B981]"></i> 綠禾國際媒體</h1>
+            <p class="text-gray-400 text-sm">線上出勤管理系統 - 測試提案版</p>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 w-full max-w-4xl">
+            <div v-for="u in users" :key="u.id" @click="login(u)" class="bg-[#161B22] border border-[#1F2937] p-5 rounded-2xl cursor-pointer transition-all hover:border-[#10B981] hover:shadow-[0_0_15px_rgba(16,185,129,0.2)] flex items-center justify-between group">
+                <div class="flex items-center gap-4">
+                    <div class="w-12 h-12 rounded-full flex items-center justify-center font-bold text-lg shadow-inner" 
+                         :class="u.id === 'u1' ? 'bg-[#10B981] text-white' : (u.type === 'parttime' ? 'bg-yellow-500 text-black' : 'bg-gray-700 text-white')">
+                        {{ u.name.charAt(0) }}
+                    </div>
+                    <div>
+                        <h2 class="text-lg font-bold text-white group-hover:text-[#10B981] transition-colors">
+                            {{ u.name }} <span class="text-[10px] bg-[#1F2937] text-gray-300 px-1.5 py-0.5 rounded ml-1 tracking-wider">{{ u.role }}</span>
+                        </h2>
+                        <p class="text-xs text-gray-400 mt-1">{{ u.title }} | {{ u.type === 'fulltime' ? '全職' : '計時工讀' }}</p>
+                    </div>
+                </div>
+                <i class="fa-solid fa-chevron-right text-gray-600 group-hover:text-[#10B981]"></i>
+            </div>
+        </div>
+    </div>
+
+    <!-- 登入後主介面 -->
+    <template v-else>
+        <!-- Header -->
+        <header class="flex items-center justify-between p-4 bg-[#161B22] border-b border-[#1F2937] shrink-0 no-print z-10 shadow-md">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-full flex items-center justify-center font-bold shadow-inner border border-gray-600"
+                     :class="currentUser.id === 'u1' ? 'bg-[#10B981] text-white' : (currentUser.type === 'parttime' ? 'bg-yellow-500 text-black' : 'bg-gray-700 text-white')">
+                    {{ currentUser.name.charAt(0) }}
+                </div>
+                <div>
+                    <h2 class="text-white font-bold leading-tight">{{ currentUser.name }}</h2>
+                    <p class="text-xs text-[#10B981]">{{ currentUser.title }}</p>
+                </div>
+            </div>
+            <div class="flex items-center gap-4">
+                <div class="text-right hidden sm:block">
+                    <p class="text-[10px] text-gray-400 uppercase tracking-widest"><i class="fa-solid fa-location-dot"></i> Taiwan (UTC+8)</p>
+                    <p class="text-sm font-mono text-white">{{ currentTimeStr }}</p>
+                </div>
+                <button @click="logout" class="w-8 h-8 rounded-full bg-gray-800 flex items-center justify-center text-gray-400 hover:text-white hover:bg-red-500 transition">
+                    <i class="fa-solid fa-right-from-bracket"></i>
+                </button>
+            </div>
+        </header>
+
+        <!-- 導航列 (Pill Nav) -->
+        <div class="bg-[#0B0F19] px-4 py-3 shrink-0 overflow-x-auto custom-scrollbar no-print border-b border-[#1F2937]">
+            <div class="flex gap-2">
+                <button @click="view = 'punch'" class="flex-shrink-0 px-4 py-1.5 rounded-full text-sm font-bold transition-all" :class="view === 'punch' ? 'bg-[#10B981] text-white' : 'bg-[#161B22] text-gray-400 border border-[#1F2937] hover:border-gray-500'">
+                    <i class="fa-solid fa-clock mr-1"></i> 打卡
+                </button>
+                <button @click="view = 'calendar'" class="flex-shrink-0 px-4 py-1.5 rounded-full text-sm font-bold transition-all" :class="view === 'calendar' ? 'bg-[#10B981] text-white' : 'bg-[#161B22] text-gray-400 border border-[#1F2937] hover:border-gray-500'">
+                    <i class="fa-regular fa-calendar-days mr-1"></i> 月曆
+                </button>
+                <button v-if="currentUser.role !== 'Level 1'" @click="view = 'admin'" class="flex-shrink-0 px-4 py-1.5 rounded-full text-sm font-bold transition-all" :class="view === 'admin' ? 'bg-yellow-600 text-white' : 'bg-[#161B22] text-yellow-600 border border-yellow-900/50 hover:border-yellow-600'">
+                    <i class="fa-solid fa-user-shield mr-1"></i> 審核作帳
+                </button>
+                <button v-if="currentUser.role !== 'Level 1'" @click="view = 'logs'" class="flex-shrink-0 px-4 py-1.5 rounded-full text-sm font-bold transition-all" :class="view === 'logs' ? 'bg-indigo-600 text-white' : 'bg-[#161B22] text-indigo-400 border border-indigo-900/50 hover:border-indigo-600'">
+                    <i class="fa-solid fa-list-check mr-1"></i> 日誌
+                </button>
+            </div>
+        </div>
+
+        <!-- 視圖切換區 -->
+        <main class="flex-1 overflow-y-auto p-4 custom-scrollbar relative">
+            
+            <!-- VIEW: PUNCH (打卡) -->
+            <div v-if="view === 'punch'" class="max-w-md mx-auto flex flex-col h-full py-4">
+                <div class="text-center mb-8 mt-4">
+                    <p class="text-gray-400 mb-1 text-sm tracking-widest uppercase">{{ currentDateStr }}</p>
+                    <h1 class="text-6xl font-mono font-black text-white tracking-tighter">{{ currentTimeStr }}</h1>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4 mb-6">
+                    <button @click="openConfirm('in')" class="flex flex-col items-center justify-center py-10 rounded-3xl bg-gradient-to-br from-[#10B981] to-[#059669] shadow-[0_4px_20px_rgba(16,185,129,0.3)] hover:brightness-110 active:scale-95 transition-all">
+                        <i class="fa-solid fa-right-to-bracket text-3xl text-white mb-3"></i>
+                        <span class="text-white font-black tracking-widest text-lg">上班</span>
+                    </button>
+                    <button @click="openConfirm('out')" class="flex flex-col items-center justify-center py-10 rounded-3xl bg-[#161B22] border border-[#1F2937] shadow-lg hover:bg-gray-800 active:scale-95 transition-all">
+                        <i class="fa-solid fa-right-from-bracket text-3xl text-gray-400 mb-3"></i>
+                        <span class="text-gray-300 font-bold tracking-widest text-lg">下班</span>
+                    </button>
+                </div>
+
+                <!-- 補登警示按鈕 (仿照截圖的粉色風格) -->
+                <button @click="showRetroModal = true" class="w-full py-4 rounded-2xl bg-gradient-to-r from-[#EC4899] to-[#BE185D] text-white font-bold text-lg flex items-center justify-center gap-2 shadow-[0_4px_15px_rgba(236,72,153,0.3)] hover:brightness-110 active:scale-95 transition-all">
+                    <i class="fa-solid fa-plus"></i> 補登出勤申請
+                </button>
+
+                <div class="mt-auto bg-[#161B22] rounded-xl p-4 border border-[#1F2937]">
+                    <h3 class="text-xs text-gray-500 mb-3 border-b border-[#1F2937] pb-2 font-bold tracking-widest uppercase">本日個人狀態</h3>
+                    <div class="flex justify-between items-center" v-if="todayRecord">
+                        <div class="font-mono space-y-1">
+                            <p class="text-white"><span class="text-gray-600 text-xs mr-2">IN</span> {{ todayRecord.checkIn || '--:--' }}</p>
+                            <p class="text-gray-400"><span class="text-gray-600 text-xs mr-2">OUT</span> {{ todayRecord.checkOut || '--:--' }}</p>
+                        </div>
+                        <div class="text-right">
+                            <span v-if="todayRecord.isRetro" class="bg-[#EC4899] text-white text-[10px] font-bold px-2 py-1 rounded">補登</span>
+                            <span v-else class="bg-[#10B981] text-white text-[10px] font-bold px-2 py-1 rounded">正常打卡</span>
+                        </div>
+                    </div>
+                    <div v-else class="text-center text-gray-600 py-3 text-sm font-bold">
+                        今日尚未打卡
+                    </div>
+                </div>
+            </div>
+
+            <!-- VIEW: CALENDAR (月曆卡牌) -->
+            <div v-if="view === 'calendar'" class="max-w-4xl mx-auto pb-8">
+                <div class="flex justify-between items-center mb-4 bg-[#161B22] p-3 rounded-xl border border-[#1F2937]">
+                    <button @click="changeMonth(-1)" class="w-8 h-8 rounded bg-gray-800 text-white"><i class="fa-solid fa-chevron-left"></i></button>
+                    <h3 class="text-white font-bold text-lg tracking-widest">{{ currentMonthStr }}</h3>
+                    <button @click="changeMonth(1)" class="w-8 h-8 rounded bg-gray-800 text-white"><i class="fa-solid fa-chevron-right"></i></button>
+                </div>
+
+                <div class="bg-[#161B22] rounded-xl border border-[#1F2937] p-4">
+                    <div class="grid grid-cols-7 gap-2 mb-2 text-center text-xs font-bold text-gray-500">
+                        <div>日</div><div>一</div><div>二</div><div>三</div><div>四</div><div>五</div><div>六</div>
+                    </div>
+                    <div class="grid grid-cols-7 gap-2">
+                        <div v-for="day in calendarDays" :key="day.date" 
+                             class="aspect-square rounded-lg flex flex-col justify-between p-1 border border-transparent transition-all"
+                             :class="{'bg-transparent': !day.isCurrentMonth, 'bg-gray-800/50 hover:border-gray-500': day.isCurrentMonth && !day.record, 'bg-gray-800 border-[#10B981]/50': day.record && !day.record.isRetro, 'bg-gray-800 border-[#EC4899]/50': day.record && day.record.isRetro}">
+                            
+                            <span class="text-[10px] font-mono text-right w-full" :class="day.isCurrentMonth ? 'text-gray-300' : 'text-gray-700'">{{ day.dayNum }}</span>
+                            
+                            <div v-if="day.record" class="w-full text-center pb-1">
+                                <div v-if="day.record.isRetro" class="w-2 h-2 rounded-full bg-[#EC4899] mx-auto mb-1 shadow-[0_0_5px_#EC4899]"></div>
+                                <div v-else class="w-2 h-2 rounded-full bg-[#10B981] mx-auto mb-1 shadow-[0_0_5px_#10B981]"></div>
+                                <div class="text-[9px] font-mono leading-none" :class="day.record.isRetro ? 'text-[#EC4899]' : 'text-[#10B981]'">
+                                    {{ calculateRecordHours(day.record).total }}h
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mt-4 grid grid-cols-2 gap-4">
+                    <div class="bg-[#161B22] p-4 rounded-xl border border-[#1F2937]">
+                        <p class="text-xs text-gray-500 mb-1">本月累計正常時數</p>
+                        <p class="text-2xl font-mono font-bold text-[#10B981]">{{ myMonthlyStats.normal }} <span class="text-sm">H</span></p>
+                    </div>
+                    <div class="bg-[#161B22] p-4 rounded-xl border border-[#1F2937]">
+                        <p class="text-xs text-gray-500 mb-1">本月累計加班時數</p>
+                        <p class="text-2xl font-mono font-bold text-yellow-500">{{ myMonthlyStats.ot }} <span class="text-sm">H</span></p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- VIEW: ADMIN (中控審核作帳) -->
+            <div v-if="view === 'admin' && currentUser.role !== 'Level 1'" class="max-w-5xl mx-auto pb-8">
+                
+                <!-- 中控台設定與匯出 -->
+                <div class="bg-[#161B22] border border-[#1F2937] p-4 rounded-xl mb-4 flex flex-col md:flex-row justify-between gap-4">
+                    <div class="flex-1">
+                        <h3 class="text-white font-bold text-sm mb-3 flex items-center"><i class="fa-solid fa-sliders text-[#10B981] mr-2"></i> 中控批次判斷：正常工作時段</h3>
+                        <div class="flex gap-4">
+                            <label class="flex items-center gap-2 text-xs text-gray-400">起 <input type="time" v-model="config.coreStart" class="bg-gray-800 text-white px-2 py-1 rounded font-mono border border-[#1F2937] focus:border-[#10B981] outline-none"></label>
+                            <label class="flex items-center gap-2 text-xs text-gray-400">迄 <input type="time" v-model="config.coreEnd" class="bg-gray-800 text-white px-2 py-1 rounded font-mono border border-[#1F2937] focus:border-[#10B981] outline-none"></label>
+                        </div>
+                    </div>
+                    <div class="flex gap-2 items-end">
+                        <button @click="exportPDF" class="px-4 py-2 rounded-lg bg-[#161B22] text-red-400 border border-red-900/50 hover:bg-gray-800 text-sm font-bold transition flex items-center gap-2">
+                            <i class="fa-solid fa-file-pdf"></i> PDF
+                        </button>
+                        <button @click="exportCSV" class="px-4 py-2 rounded-lg bg-[#161B22] text-[#10B981] border border-[#10B981]/30 hover:bg-gray-800 text-sm font-bold transition flex items-center gap-2">
+                            <i class="fa-solid fa-file-excel"></i> Excel
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 漏斗條件過濾器 (Pill check) -->
+                <div class="flex flex-wrap gap-2 mb-4 items-center bg-[#0B0F19] p-2 rounded-xl sticky top-0 z-10 border border-[#1F2937]">
+                    <span class="text-xs font-bold text-gray-500 mr-2">漏斗條件</span>
+                    <label class="cursor-pointer px-3 py-1.5 rounded-full text-xs font-bold border transition-colors select-none" :class="filters.normal ? 'bg-[#10B981]/20 border-[#10B981] text-[#10B981]' : 'bg-transparent border-[#1F2937] text-gray-500'">
+                        <input type="checkbox" v-model="filters.normal" class="hidden"> <i class="fa-solid fa-check mr-1"></i>正常工作
+                    </label>
+                    <label class="cursor-pointer px-3 py-1.5 rounded-full text-xs font-bold border transition-colors select-none" :class="filters.ot ? 'bg-yellow-500/20 border-yellow-500 text-yellow-500' : 'bg-transparent border-[#1F2937] text-gray-500'">
+                        <input type="checkbox" v-model="filters.ot" class="hidden"> <i class="fa-solid fa-bolt mr-1"></i>加班時數
+                    </label>
+                    <label class="cursor-pointer px-3 py-1.5 rounded-full text-xs font-bold border transition-colors select-none" :class="filters.retro ? 'bg-[#EC4899]/20 border-[#EC4899] text-[#EC4899]' : 'bg-transparent border-[#1F2937] text-gray-500'">
+                        <input type="checkbox" v-model="filters.retro" class="hidden"> <i class="fa-solid fa-triangle-exclamation mr-1"></i>異常/待審補登
+                    </label>
+                </div>
+
+                <!-- 作帳看板卡 -->
+                <div id="print-area" class="space-y-4">
+                    <h2 class="text-white font-bold text-xl mb-4 border-l-4 border-[#10B981] pl-3 no-print">{{ currentMonthStr }} 結算看板</h2>
+                    <div v-for="stat in adminStats" :key="stat.user.id" class="bg-card bg-[#161B22] border border-[#1F2937] rounded-xl overflow-hidden shadow-lg">
+                        
+                        <!-- 卡片標頭 -->
+                        <div class="p-4 flex flex-col sm:flex-row sm:items-center justify-between cursor-pointer hover:bg-gray-800 transition" @click="stat.expanded = !stat.expanded">
+                            <div class="flex items-center gap-4 mb-3 sm:mb-0">
+                                <div class="w-12 h-12 rounded-lg flex items-center justify-center font-bold text-lg shadow-inner bg-gray-700" :class="{'text-yellow-400': stat.user.type === 'parttime'}">
+                                    {{ stat.user.name.charAt(0) }}
+                                </div>
+                                <div>
+                                    <h4 class="text-white font-bold text-lg flex items-center gap-2">
+                                        {{ stat.user.name }}
+                                        <span v-if="stat.pendingCount > 0" class="bg-[#EC4899] text-white text-[9px] px-1.5 py-0.5 rounded-full animate-pulse">待審核</span>
+                                    </h4>
+                                    <p class="text-xs text-gray-400 mt-0.5">{{ stat.user.title }} ({{ stat.user.type === 'parttime' ? '兼職時薪' : '全職月薪' }})</p>
+                                </div>
+                            </div>
+                            <div class="flex gap-6 justify-end items-end sm:items-center">
+                                <div class="text-center" v-show="filters.normal">
+                                    <p class="text-[10px] text-gray-500 uppercase font-bold">正常(H)</p>
+                                    <p class="text-xl font-mono font-bold text-[#10B981]">{{ stat.normal }}</p>
+                                </div>
+                                <div class="text-center" v-show="filters.ot">
+                                    <p class="text-[10px] text-gray-500 uppercase font-bold">加班(H)</p>
+                                    <p class="text-xl font-mono font-bold text-yellow-500">{{ stat.ot }}</p>
+                                </div>
+                                <div class="text-center" v-show="filters.retro">
+                                    <p class="text-[10px] text-gray-500 uppercase font-bold">異常/補登</p>
+                                    <p class="text-xl font-mono font-bold text-[#EC4899]">{{ stat.retroList.length }}<span class="text-xs text-gray-500">筆</span></p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 卡片展開明細 (異常與補登異動) -->
+                        <div v-if="stat.expanded" class="border-t border-[#1F2937] bg-[#0B0F19] p-4">
+                            <h5 class="text-xs font-bold text-gray-400 mb-3 uppercase tracking-widest"><i class="fa-solid fa-clipboard-list mr-1"></i> 異動與補登明細</h5>
+                            <div v-if="stat.retroList.length === 0" class="text-gray-600 text-sm italic py-2 text-center bg-gray-800/20 rounded">
+                                該月無任何異常、請假或補登紀錄
+                            </div>
+                            <div v-else class="space-y-3">
+                                <div v-for="rec in stat.retroList" :key="rec.id" class="flex flex-col sm:flex-row sm:items-center justify-between bg-[#161B22] border-l-4 p-3 rounded shadow-sm"
+                                     :class="rec.status === 'pending' ? 'border-[#EC4899]' : (rec.status === 'unlocked' ? 'border-yellow-500' : 'border-[#10B981]')">
+                                    <div>
+                                        <div class="flex items-center gap-2 mb-1">
+                                            <span class="text-white font-mono text-sm">{{ rec.date }}</span>
+                                            <span class="text-[10px] px-1.5 py-0.5 rounded font-bold tracking-wider"
+                                                  :class="{'bg-[#EC4899]/20 text-[#EC4899]': rec.status === 'pending', 'bg-yellow-500/20 text-yellow-500': rec.status === 'unlocked', 'bg-[#10B981]/20 text-[#10B981]': rec.status === 'approved'}">
+                                                {{ rec.status === 'pending' ? '待主管審核' : (rec.status === 'unlocked' ? '已退回/釋放權限' : '已核准計薪') }}
+                                            </span>
+                                        </div>
+                                        <p class="text-gray-400 font-mono text-xs">{{ rec.checkIn || '--:--' }} 至 {{ rec.checkOut || '--:--' }}</p>
+                                        <p class="text-gray-500 text-xs mt-1 bg-[#0B0F19] p-1.5 rounded inline-block"><i class="fa-solid fa-quote-left text-gray-600 mr-1"></i>{{ rec.note }}</p>
+                                    </div>
+                                    
+                                    <!-- 權限操作區 -->
+                                    <div class="mt-3 sm:mt-0 flex gap-2 no-print">
+                                        <button v-if="rec.status === 'pending'" @click="approveRetro(rec)" class="px-3 py-1.5 bg-[#10B981] text-white text-xs font-bold rounded shadow hover:bg-[#059669]">
+                                            核准
+                                        </button>
+                                        <button v-if="rec.status !== 'unlocked'" @click="unlockRecord(rec)" class="px-3 py-1.5 bg-[#161B22] border border-yellow-600 text-yellow-500 hover:bg-yellow-600 hover:text-white text-xs font-bold rounded shadow transition">
+                                            釋放權限(退回)
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- VIEW: LOGS (操作流水帳日誌) -->
+            <div v-if="view === 'logs' && currentUser.role !== 'Level 1'" class="max-w-3xl mx-auto pb-8">
+                <div class="bg-[#161B22] rounded-xl border border-[#1F2937] p-4">
+                    <h3 class="text-white font-bold mb-4 flex items-center border-b border-[#1F2937] pb-3">
+                        <i class="fa-solid fa-server text-indigo-400 mr-2"></i> 系統操作流水帳
+                    </h3>
+                    <div class="space-y-4">
+                        <div v-for="(log, idx) in logs" :key="idx" class="flex items-start gap-4">
+                            <div class="text-[10px] font-mono text-gray-500 mt-1 whitespace-nowrap">{{ log.time }}</div>
+                            <div class="bg-[#0B0F19] p-3 rounded-lg border border-[#1F2937] flex-1">
+                                <span class="font-bold" :class="log.action.includes('異常') || log.action.includes('釋放') ? 'text-yellow-400' : 'text-[#10B981]'">{{ log.user }}</span>
+                                <span class="text-gray-300 text-sm ml-2">{{ log.detail }}</span>
+                            </div>
+                        </div>
+                        <div v-if="logs.length === 0" class="text-center text-gray-500 text-sm py-4">目前無操作紀錄</div>
+                    </div>
+                </div>
+            </div>
+
+        </main>
+    </template>
+
+    <!-- 打卡確認防呆 Modal -->
+    <div v-if="showConfirm" class="absolute inset-0 z-[60] bg-black/70 flex items-center justify-center p-4 backdrop-blur-sm slide-up">
+        <div class="bg-[#161B22] border border-[#1F2937] rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+            <h3 class="text-xl font-black text-white mb-2 flex items-center gap-2">
+                <i class="fa-solid fa-circle-exclamation text-yellow-500"></i> 確認打卡操作
+            </h3>
+            <p class="text-gray-300 mb-5 text-sm leading-relaxed">
+                您即將進行 <span class="text-white font-bold bg-gray-700 px-1.5 py-0.5 rounded text-xs">{{ confirmAction === 'in' ? '上班' : '下班' }}</span> 打卡。<br>
+                登記時間：<span class="font-mono text-[#10B981] font-bold text-lg ml-1">{{ currentTimeStr }}</span>。
+            </p>
+            <div class="bg-red-900/20 border border-red-900/50 rounded-lg p-3 mb-6">
+                <p class="text-red-400 text-xs font-bold"><i class="fa-solid fa-triangle-exclamation mr-1"></i> 注意：打卡後無法直接刪除修改。若因公關活動需外勤提早離開，或按錯時段，一律需透過「補登流程」申請修改，且補登薪資會經由系統批次重新判斷。</p>
+            </div>
+            <div class="flex gap-3">
+                <button @click="showConfirm = false" class="flex-1 py-2.5 rounded-xl bg-gray-800 text-gray-300 font-bold hover:bg-gray-700 transition">取消</button>
+                <button @click="executePunch" class="flex-1 py-2.5 rounded-xl bg-[#10B981] text-white font-bold hover:bg-[#059669] transition shadow-lg">確認無誤</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 補登申請 Modal (粉色警示視覺) -->
+    <div v-if="showRetroModal" class="absolute inset-0 z-[60] bg-black/80 flex items-end sm:items-center justify-center sm:p-4 backdrop-blur-sm">
+        <div class="bg-[#161B22] sm:border border-[#1F2937] w-full max-w-md overflow-hidden shadow-2xl rounded-t-2xl sm:rounded-2xl slide-up">
+            <div class="bg-gradient-to-r from-[#EC4899] to-[#BE185D] p-4 text-center relative shadow-inner">
+                <h3 class="text-white font-black text-lg tracking-wider"><i class="fa-solid fa-file-pen mr-2"></i> 新增補登 / 異動出勤</h3>
+                <button @click="showRetroModal = false" class="absolute right-4 top-4 text-white/80 hover:text-white"><i class="fa-solid fa-xmark text-xl"></i></button>
+            </div>
+            <div class="p-6 space-y-4">
+                <div>
+                    <label class="block text-gray-400 text-xs font-bold mb-1 uppercase tracking-wider">補登日期</label>
+                    <input type="date" v-model="retroForm.date" class="w-full bg-[#0B0F19] border border-[#1F2937] rounded-lg p-3 text-white focus:border-[#EC4899] outline-none font-mono">
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-gray-400 text-xs font-bold mb-1 uppercase tracking-wider">上班時間 (起)</label>
+                        <input type="time" v-model="retroForm.checkIn" class="w-full bg-[#0B0F19] border border-[#1F2937] rounded-lg p-3 text-white focus:border-[#EC4899] outline-none font-mono">
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 text-xs font-bold mb-1 uppercase tracking-wider">下班時間 (迄)</label>
+                        <input type="time" v-model="retroForm.checkOut" class="w-full bg-[#0B0F19] border border-[#1F2937] rounded-lg p-3 text-white focus:border-[#EC4899] outline-none font-mono">
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-gray-400 text-xs font-bold mb-1 uppercase tracking-wider">備註說明 (必填)</label>
+                    <textarea v-model="retroForm.note" rows="2" class="w-full bg-[#0B0F19] border border-[#1F2937] rounded-lg p-3 text-white focus:border-[#EC4899] outline-none placeholder-gray-600 text-sm" placeholder="例如：外出公關活動及早下班、忘記打卡..."></textarea>
+                </div>
+                <button @click="submitRetro" class="w-full py-3.5 mt-2 rounded-xl bg-[#EC4899] text-white font-black tracking-widest hover:bg-[#BE185D] transition shadow-lg shadow-pink-900/30">
+                    送出主管審核
+                </button>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<script>
+    const { createApp } = Vue;
+
+    createApp({
+        data() {
+            return {
+                // 5個模擬使用者 (依照要求包含全職與臨時工讀)
+                users: [
+                    { id: 'u1', name: '李經理', role: 'Level 2', title: '專案經理 (具審核權)', type: 'fulltime' },
+                    { id: 'u2', name: '王公關', role: 'Level 1', title: '公關企劃', type: 'fulltime' },
+                    { id: 'u3', name: '陳編輯', role: 'Level 1', title: '內容編輯', type: 'fulltime' },
+                    { id: 'u4', name: '林外勤', role: 'Level 1', title: '活動執行', type: 'fulltime' },
+                    { id: 'u5', name: '張工讀', role: 'Level 1', title: '臨時聘請工讀生', type: 'parttime' }
+                ],
+                currentUser: null,
+                view: 'punch', // punch, calendar, admin, logs
+                records: [], // 儲存 43 筆打卡資料
+                logs: [], // 系統流水帳
+                config: {
+                    coreStart: '09:00', // 中控批次判斷：正常時段起
+                    coreEnd: '18:00'    // 中控批次判斷：正常時段迄
+                },
+                // UI 狀態
+                currentTime: new Date(),
+                currentMonthOffset: 0, // 月曆切換用
+                showConfirm: false,
+                confirmAction: null,
+                showRetroModal: false,
+                retroForm: { date: '', checkIn: '09:00', checkOut: '18:00', note: '' },
+                // Admin 漏斗過濾
+                filters: { normal: true, ot: true, retro: true }
+            }
+        },
+        computed: {
+            currentDateStr() {
+                return `${this.currentTime.getFullYear()}-${String(this.currentTime.getMonth()+1).padStart(2,'0')}-${String(this.currentTime.getDate()).padStart(2,'0')}`;
+            },
+            currentTimeStr() {
+                return `${String(this.currentTime.getHours()).padStart(2,'0')}:${String(this.currentTime.getMinutes()).padStart(2,'0')}`;
+            },
+            currentMonthStr() {
+                let d = new Date(this.currentTime);
+                d.setMonth(d.getMonth() + this.currentMonthOffset);
+                return `${d.getFullYear()}年 ${String(d.getMonth()+1).padStart(2,'0')}月`;
+            },
+            todayRecord() {
+                if(!this.currentUser) return null;
+                return this.records.find(r => r.userId === this.currentUser.id && r.date === this.currentDateStr);
+            },
+            calendarDays() {
+                if(!this.currentUser) return [];
+                let baseDate = new Date(this.currentTime);
+                baseDate.setMonth(baseDate.getMonth() + this.currentMonthOffset);
+                let y = baseDate.getFullYear();
+                let m = baseDate.getMonth();
+                
+                let firstDay = new Date(y, m, 1);
+                let lastDay = new Date(y, m + 1, 0);
+                
+                let days = [];
+                // 補齊前一個月的空白天數
+                for (let i = 0; i < firstDay.getDay(); i++) {
+                    days.push({ dayNum: '', isCurrentMonth: false });
+                }
+                // 當月天數
+                for (let i = 1; i <= lastDay.getDate(); i++) {
+                    let dStr = `${y}-${String(m+1).padStart(2,'0')}-${String(i).padStart(2,'0')}`;
+                    let record = this.records.find(r => r.userId === this.currentUser.id && r.date === dStr);
+                    days.push({ dayNum: i, date: dStr, isCurrentMonth: true, record: record });
+                }
+                return days;
+            },
+            myMonthlyStats() {
+                if(!this.currentUser) return { normal: 0, ot: 0 };
+                let baseDate = new Date(this.currentTime);
+                baseDate.setMonth(baseDate.getMonth() + this.currentMonthOffset);
+                let y = baseDate.getFullYear();
+                let mStr = String(baseDate.getMonth()+1).padStart(2,'0');
+                let prefix = `${y}-${mStr}`;
+                
+                let normal = 0, ot = 0;
+                this.records.forEach(r => {
+                    if (r.userId === this.currentUser.id && r.date.startsWith(prefix) && r.status === 'approved') {
+                        let hrs = this.calculateRecordHours(r);
+                        normal += hrs.normal;
+                        ot += hrs.ot;
+                    }
+                });
+                return { normal, ot };
+            },
+            adminStats() {
+                // 中控作帳看板資料 (依過濾器與月份)
+                let baseDate = new Date(this.currentTime);
+                baseDate.setMonth(baseDate.getMonth() + this.currentMonthOffset);
+                let prefix = `${baseDate.getFullYear()}-${String(baseDate.getMonth()+1).padStart(2,'0')}`;
+                
+                return this.users.map(u => {
+                    let userRecords = this.records.filter(r => r.userId === u.id && r.date.startsWith(prefix));
+                    let normal = 0, ot = 0, pendingCount = 0;
+                    let retroList = [];
+                    
+                    userRecords.forEach(r => {
+                        let hrs = this.calculateRecordHours(r);
+                        // 只加總 approved 且符合 checkbox 過濾的時數
+                        if (r.status === 'approved') {
+                            normal += hrs.normal;
+                            ot += hrs.ot;
+                        }
+                        if (r.isRetro || r.status !== 'approved') {
+                            retroList.push(r);
+                            if(r.status === 'pending') pendingCount++;
+                        }
+                    });
+                    
+                    // 根據過濾器動態清空顯示時數 (視覺作帳用)
+                    return {
+                        user: u,
+                        normal: this.filters.normal ? normal : 0,
+                        ot: this.filters.ot ? ot : 0,
+                        pendingCount,
+                        retroList,
+                        expanded: false
+                    };
+                });
+            }
+        },
+        methods: {
+            login(user) {
+                this.currentUser = user;
+                this.view = 'punch';
+                this.addLog('系統登入', `登入模擬身分: ${user.name}`);
+            },
+            logout() {
+                this.currentUser = null;
+                this.view = 'punch';
+                this.currentMonthOffset = 0;
+            },
+            openConfirm(action) {
+                this.confirmAction = action;
+                this.showConfirm = true;
+            },
+            executePunch() {
+                let r = this.records.find(x => x.userId === this.currentUser.id && x.date === this.currentDateStr);
+                if (this.confirmAction === 'in') {
+                    if (r) { r.checkIn = this.currentTimeStr; } 
+                    else {
+                        this.records.push({ id: 'R'+Date.now(), userId: this.currentUser.id, date: this.currentDateStr, checkIn: this.currentTimeStr, checkOut: '', isRetro: false, status: 'approved', note: '' });
+                    }
+                    this.addLog('打卡登錄', `執行上班打卡 (${this.currentTimeStr})`);
+                } else {
+                    if (r) { r.checkOut = this.currentTimeStr; }
+                    else {
+                         this.records.push({ id: 'R'+Date.now(), userId: this.currentUser.id, date: this.currentDateStr, checkIn: '', checkOut: this.currentTimeStr, isRetro: false, status: 'approved', note: '' });
+                    }
+                    this.addLog('打卡登錄', `執行下班打卡 (${this.currentTimeStr})`);
+                }
+                this.showConfirm = false;
+            },
+            submitRetro() {
+                if(!this.retroForm.note) { alert('請填寫備註說明'); return; }
+                this.records.push({
+                    id: 'R_RETRO_'+Date.now(),
+                    userId: this.currentUser.id,
+                    date: this.retroForm.date || this.currentDateStr,
+                    checkIn: this.retroForm.checkIn,
+                    checkOut: this.retroForm.checkOut,
+                    isRetro: true,
+                    status: 'pending',
+                    note: this.retroForm.note
+                });
+                this.addLog('異常補登', `提出 ${this.retroForm.date} 之補登申請`);
+                this.showRetroModal = false;
+                this.retroForm = { date: '', checkIn: '09:00', checkOut: '18:00', note: '' };
+            },
+            approveRetro(rec) {
+                rec.status = 'approved';
+                this.addLog('管理審核', `核准了 ${this.users.find(u=>u.id===rec.userId).name} 的補登紀錄 (${rec.date})`);
+            },
+            unlockRecord(rec) {
+                rec.status = 'unlocked';
+                this.addLog('權限釋放', `退回並釋放 ${this.users.find(u=>u.id===rec.userId).name} 於 ${rec.date} 的紀錄權限`);
+            },
+            changeMonth(delta) {
+                this.currentMonthOffset += delta;
+            },
+            // --- 核心數學邏輯：中控時數批次判斷 (0.5小時進位, 加班判定) ---
+            calculateRecordHours(rec) {
+                if (!rec.checkIn || !rec.checkOut) return { normal: 0, ot: 0, total: 0 };
+                const parse = (t) => { let [h,m] = t.split(':').map(Number); return h + m/60; };
+                
+                let start = parse(rec.checkIn);
+                let end = parse(rec.checkOut);
+                if (end < start) end += 24; // 跨夜處理
+                
+                let total = end - start;
+                if (total >= 5) total -= 1; // 假設滿5小時扣除1小時休息
+                total = Math.floor(total * 2) / 2; // 以 0.5 小時為單位向下取整 (勞基法常見設定)
+
+                // 取得中控核心正常時段
+                let cStart = parse(this.config.coreStart);
+                let cEnd = parse(this.config.coreEnd);
+
+                // 計算落在正常時段內的重疊時間
+                let overlapStart = Math.max(start, cStart);
+                let overlapEnd = Math.min(end, cEnd);
+                let coreOverlap = Math.max(0, overlapEnd - overlapStart);
+                
+                if (total >= 4 && coreOverlap > 4) { coreOverlap -= 1; } // 重疊區段內扣除休息
+                coreOverlap = Math.floor(coreOverlap * 2) / 2;
+                
+                let normal = Math.min(8, coreOverlap); // 單日正常工時最高 8 小時
+                let ot = Math.max(0, total - normal); // 其餘皆算加班 (包含提早來、晚走)
+                
+                return { normal, ot, total };
+            },
+            addLog(action, detail) {
+                let now = new Date();
+                let timeStr = `${String(now.getMonth()+1).padStart(2,'0')}/${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+                let userName = this.currentUser ? this.currentUser.name : 'System';
+                this.logs.unshift({ time: timeStr, user: userName, action, detail });
+            },
+            exportPDF() {
+                const element = document.getElementById('print-area');
+                const opt = {
+                    margin: 10,
+                    filename: `綠禾媒體_結算看板_${this.currentMonthStr.replace(' ','')}.pdf`,
+                    image: { type: 'jpeg', quality: 0.98 },
+                    html2canvas: { scale: 2, useCORS: true },
+                    jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+                };
+                html2pdf().set(opt).from(element).save();
+                this.addLog('報表匯出', '執行了 PDF 格式下載');
+            },
+            exportCSV() {
+                let exportData = [];
+                let baseDate = new Date(this.currentTime);
+                baseDate.setMonth(baseDate.getMonth() + this.currentMonthOffset);
+                let prefix = `${baseDate.getFullYear()}-${String(baseDate.getMonth()+1).padStart(2,'0')}`;
+
+                this.records.filter(r => r.date.startsWith(prefix)).forEach(r => {
+                    let u = this.users.find(x => x.id === r.userId);
+                    let hrs = this.calculateRecordHours(r);
+                    exportData.push({
+                        "日期": r.date,
+                        "姓名": u.name,
+                        "職務": u.title,
+                        "上班": r.checkIn,
+                        "下班": r.checkOut,
+                        "狀態": r.isRetro ? '補登' : '正常',
+                        "審核狀態": r.status,
+                        "正常工時": hrs.normal,
+                        "加班工時": hrs.ot,
+                        "備註": r.note
+                    });
+                });
+                
+                const csv = Papa.unparse(exportData);
+                const blob = new Blob(["\uFEFF"+csv], { type: 'text/csv;charset=utf-8;' });
+                const link = document.createElement("a");
+                link.href = URL.createObjectURL(blob);
+                link.download = `綠禾媒體_出勤明細_${this.currentMonthStr.replace(' ','')}.csv`;
+                link.click();
+                this.addLog('報表匯出', '執行了 Excel(CSV) 格式下載');
+            },
+            generateInitialData() {
+                // 產生恰好 43 筆模擬資料，分佈在最近一個月內，涵蓋5位員工
+                let baseDate = new Date();
+                let cYear = baseDate.getFullYear();
+                let cMonth = baseDate.getMonth(); // 0-based
+                let rId = 1;
+                
+                // 設定一組隨機產生器以確保每次載入看起來真實
+                const seededRand = (max) => Math.floor(Math.random() * max);
+
+                for(let i=0; i<43; i++) {
+                    let u = this.users[seededRand(this.users.length)];
+                    let day = seededRand(28) + 1; // 1~28
+                    let dStr = `${cYear}-${String(cMonth+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+                    
+                    let isRetro = Math.random() > 0.85;
+                    let inH = 8 + seededRand(2); let outH = 17 + seededRand(4);
+                    // 工讀生時段
+                    if (u.id === 'u5') { inH = 13 + seededRand(2); outH = 17 + seededRand(2); }
+                    
+                    let chIn = `${String(inH).padStart(2,'0')}:${String(seededRand(60)).padStart(2,'0')}`;
+                    let chOut = `${String(outH).padStart(2,'0')}:${String(seededRand(60)).padStart(2,'0')}`;
+                    
+                    this.records.push({
+                        id: 'SIM_'+rId++,
+                        userId: u.id,
+                        date: dStr,
+                        checkIn: chIn,
+                        checkOut: chOut,
+                        isRetro: isRetro,
+                        status: isRetro ? (Math.random() > 0.5 ? 'pending' : 'approved') : 'approved',
+                        note: isRetro ? '公關活動外勤 / 忘記打卡' : ''
+                    });
+                }
+                this.addLog('系統初始化', '已載入 43 筆歷史模擬資料');
+            }
+        },
+        mounted() {
+            // 每秒更新時鐘
+            setInterval(() => { this.currentTime = new Date(); }, 1000);
+            this.generateInitialData();
+        }
+    }).mount('#app');
+</script>
+</body>
+</html>
